@@ -29,7 +29,7 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        python_version: [3.5, 3.6, 3.7, 3.8, "pypy3"]
+        python_version: [3.6, 3.7, 3.8, 3.9, "3.10", "3.11-dev", "pypy3"]
         exclude:
           # Do not test all minor versions on all platforms, especially if they
           # are not the oldest/newest supported versions
@@ -37,6 +37,8 @@ jobs:
             python_version: 3.6
           - os: windows-latest
             python_version: 3.7
+          - os: windows-latest
+            python_version: 3.8
             # as of  4/02/2020, psutil won't build under PyPy + Windows
           - os: windows-latest
             python_version: "pypy3"
@@ -44,6 +46,8 @@ jobs:
             python_version: 3.6
           - os: macos-latest
             python_version: 3.7
+          - os: macos-latest
+            python_version: 3.8
           - os: macos-latest
             # numpy triggers: RuntimeError: Polyfit sanity test emitted a
             # warning
@@ -54,7 +58,7 @@ jobs:
     steps:
     - uses: actions/checkout@v1
     - name: Set up Python ${{ matrix.python_version }}
-      uses: actions/setup-python@v1
+      uses: actions/setup-python@v2
       with:
         python-version: ${{ matrix.python_version }}
     - name: Install project and dependencies
@@ -90,71 +94,37 @@ jobs:
         token: ${{ secrets.CODECOV_TOKEN }}
         file: ./coverage.xml
 
-  python-nightly:
-    runs-on: ubuntu-18.04
-    env:
-      ACTIONS_ALLOW_UNSECURE_COMMANDS: true
-    steps:
-    - uses: actions/checkout@v1
-    - name: Install Python from ppa:deadsnakes/nightly
-      run: |
-        sudo add-apt-repository ppa:deadsnakes/nightly
-        sudo apt update
-        sudo apt install python3.9 python3.9-venv python3.9-dev
-        python3.9 -m venv nightly-venv
-        echo ::add-path::nightly-venv/bin
-    - name: Display Python version
-      run: python -c "import sys; print(sys.version)"
-    - name: Install project and dependencies
-      run: |
-        set -e
-        python -m pip install --upgrade pip
-        python -m pip install -r dev-requirements.txt
-        python -m pip install -e .
-        python ci/install_coverage_subprocess_pth.py
-    - name: Generate old pickles (backward compat)
-      shell: bash
-      run: |
-        git_head=$(git rev-parse HEAD)
-        cp tests/generate_old_pickles.py tests/_generate_old_pickles.py
-        git checkout v1.4.1
-        python tests/_generate_old_pickles.py
-        git checkout ${git_head}
-    - name: Test with pytest
-      run: |
-        COVERAGE_PROCESS_START=$GITHUB_WORKSPACE/.coveragerc \
-          PYTHONPATH='.:tests' python -m pytest -r s
-        coverage combine --append
-        coverage xml -i
-    - name: Publish coverage results
-      uses: codecov/codecov-action@v1
-      with:
-        token: ${{ secrets.CODECOV_TOKEN }}
-        file: ./coverage.xml
-
   distributed-downstream-build:
     runs-on: ubuntu-latest
     if: "contains(github.event.pull_request.labels.*.name, 'ci distributed') || contains(github.event.pull_request.labels.*.name, 'ci downstream')"
     env:
       PROJECT: distributed
-      TEST_REQUIREMENTS: pytest pytest-timeout numpy pandas mock bokeh fsspec>=0.3.3
+      TEST_REQUIREMENTS: cryptography pytest pytest-asyncio<0.14.0 pytest-timeout pytest-rerunfailures numpy pandas mock bokeh fsspec>=0.3.3 aiohttp pyarrow git+https://github.com/dask/dask
       PROJECT_URL: https://github.com/dask/distributed.git
-      PYTEST_ADDOPTS: "--timeout-method=thread --timeout=300 -m \"not avoid_travis\" -k \"not test_dask_scheduler and not test_workspace_concurrency and not test_defaults and not test_service_hosts and not test_logging_file_config and not test_hostport and not test_workdir_simple and not test_two_workspaces_in_same_directory and not test_recompute_released_results and not test_connection_args and not test_listen_args  and not test_remote_access\""
     strategy:
       matrix:
-        python_version: [3.7]
+        python_version: ["3.10"]
     steps:
     - uses: actions/checkout@v1
-    - name: Set up Python 3.7
+    - name: Set up Python
       uses: actions/setup-python@v1
       with:
         python-version: ${{ matrix.python_version }}
     - name: Install project and dependencies
       run: |
         bash ./.github/scripts/install_downstream_project.sh
-    - name: Test the downstream project
+    - name: Install developed version of cloudpickle
+      shell: bash
       run: |
-        bash ./.github/scripts/test_downstream_project.sh
+        python -m pip install -e .
+    - name: Test the downstream project
+      shell: bash
+      run: |
+        # FIXME ipv6-related failures on Ubuntu github actions CI
+        # https://github.com/dask/distributed/issues/4514
+        export DISABLE_IPV6=1
+        export PYTEST_ADDOPTS=("-m" "not avoid_ci")
+        source ./.github/scripts/test_downstream_project.sh
 
   joblib-downstream-build:
     runs-on: ubuntu-latest
@@ -165,10 +135,10 @@ jobs:
       PROJECT_URL: https://github.com/joblib/joblib.git
     strategy:
       matrix:
-        python_version: [3.7]
+        python_version: ["3.10"]
     steps:
     - uses: actions/checkout@v1
-    - name: Set up Python 3.7
+    - name: Set up Python
       uses: actions/setup-python@v1
       with:
         python-version: ${{ matrix.python_version }}
@@ -190,19 +160,23 @@ jobs:
     env:
       PROJECT: loky
       TEST_REQUIREMENTS: "pytest psutil"
-      PROJECT_URL: https://github.com/tomMoral/loky.git
+      PROJECT_URL: https://github.com/joblib/loky.git
     strategy:
       matrix:
-        python_version: [3.7]
+        python_version: ["3.10"]
     steps:
     - uses: actions/checkout@v1
-    - name: Set up Python 3.7
+    - name: Set up Python
       uses: actions/setup-python@v1
       with:
         python-version: ${{ matrix.python_version }}
-    - name: Install project and dependencies
+    - name: Install downstream project and dependencies
       run: |
         bash ./.github/scripts/install_downstream_project.sh
+    - name: Install developed version of cloudpickle
+      shell: bash
+      run: |
+        python -m pip install -e .
     - name: Test the downstream project
       run: |
         bash ./.github/scripts/test_downstream_project.sh
@@ -214,21 +188,27 @@ jobs:
       PROJECT: ray
     strategy:
       matrix:
-        python_version: [3.7]
+        python_version: ["3.10"]
     steps:
     - uses: actions/checkout@v1
-    - name: Set up Python 3.7
+    - name: Set up Python
       uses: actions/setup-python@v1
       with:
         python-version: ${{ matrix.python_version }}
     - name: Install project and dependencies
       run: |
         python -m pip install --upgrade -r dev-requirements.txt
-        python -m pip install setproctitle psutil ray==0.8.6
+        python -m pip install setproctitle psutil
+        # from https://docs.ray.io/en/master/development.html#building-ray
+        pip install -U https://s3-us-west-2.amazonaws.com/ray-wheels/latest/ray-2.0.0.dev0-cp310-cp310-manylinux2014_x86_64.whl
+        pushd ..
+        git clone https://github.com/ray-project/ray.git
+        pushd ray
+        python python/ray/setup-dev.py --yes
+        popd
+        popd
         PROJECT_DIR=$(python -c "import os, ray; print(os.path.dirname(ray.__file__), flush=True)")
         rm $PROJECT_DIR/cloudpickle/cloudpickle.py
-        git clone https://github.com/ray-project/ray.git ../ray
-        cp -R ../ray/python/ray/tests $PROJECT_DIR/tests
         cp cloudpickle/cloudpickle.py $PROJECT_DIR/cloudpickle/cloudpickle.py
         cp cloudpickle/compat.py $PROJECT_DIR/cloudpickle/compat.py
         cp cloudpickle/cloudpickle_fast.py $PROJECT_DIR/cloudpickle/cloudpickle_fast.py
